@@ -9,7 +9,7 @@ enum type_t {
     CONS,
     INT,
     PROC,
-    PRIMITIVE,
+    PRIMITIVE
 };
 
 struct value_t;
@@ -30,11 +30,6 @@ struct proc_t {
   struct value_t* params;
   struct value_t* body;
   struct value_t* env;
-};
-
-struct env_t {
-  struct value_t* env;
-  struct env_t* parent;
 };
 
 struct value_t {
@@ -76,7 +71,11 @@ DEFSYM(setf);
 DEFSYM(define);
 
 struct value_t *symbols = &nil_v;
-struct value_t *toplevel_env = &nil_v;
+
+struct value_t toplevel_env_v = {.type = CONS,
+                                 .cons.car = &nil_v,
+                                 .cons.cdr = &nil_v};
+struct value_t *toplevel_env = &toplevel_env_v;
 
 
 #define TOKEN_BUF_SIZE 256
@@ -156,6 +155,13 @@ struct value_t* makeproc(struct value_t* params,
   return ret;
 }
 
+struct value_t *makeenv(struct value_t* parent) {
+  struct value_t *ret = malloc(sizeof(struct value_t));
+  *ret = (struct value_t){.type = CONS,
+                          .cons.car = nil_p,
+                          .cons.cdr = parent};
+  return ret;
+}
 
 struct value_t* find_symbol(const char* name) {
   struct value_t* sym;
@@ -362,38 +368,40 @@ const char* print(struct value_t* obj) {
 struct value_t* extend(struct value_t* env,
                        struct value_t* symbol,
                        struct value_t* value) {
+  env->cons.car = cons(cons(symbol, value), env->cons.car);
 
-  return cons(cons(symbol, value),
-              env);
+  return env;
 }
 
 struct value_t* multiple_extend(struct value_t* env,
                                 struct value_t* symbols,
                                 struct value_t* values) {
-  struct value_t* res = env;
+  env = makeenv(env);
+  struct value_t* res = env->cons.car;
   struct value_t* sym = symbols;
   struct value_t* val = values;
   for (;sym != nil_p && val != nil_p; sym = cdr(sym), val=cdr(val)) {
     res = cons(cons(car(sym), car(val)), res);
   }
 
-  return res;
+  env->cons.car = res;
+  return env;
 }
 
-struct value_t* assoc(struct value_t* symbol, struct value_t* alist) {
-  if (symbol == nil_p || alist == nil_p)
+struct value_t* find_in_env(struct value_t* symbol,
+                            struct value_t* env) {
+  if (symbol == nil_p || env == nil_p)
     return nil_p;
 
-
   struct value_t* entry;
-  for (entry = alist; !is_nil(entry); entry = cdr(entry)) {
+
+  for (entry = env->cons.car; !is_nil(entry); entry = cdr(entry)) {
     if (car(car(entry)) == symbol)
       return car(entry);
   }
 
-  return nil_p;
+  return find_in_env(symbol, cdr(env));
 }
-
 
 struct value_t* eval(struct value_t* val, struct value_t* env);
 
@@ -431,7 +439,7 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
     if (sym == nil_p || sym->type != SYMBOL)
       die("setf expects a symbol");
 
-    struct value_t* tmp = assoc(sym, env);
+    struct value_t* tmp = find_in_env(sym, env);
     if (tmp == nil_p)
       die("Unbound symbol: %s\n", val->symbol.name);
 
@@ -447,8 +455,9 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
     if (sym == nil_p || sym->type != SYMBOL)
       die("define expects a symbol");
 
-    toplevel_env->cons.cdr = cons(cons(sym, symval),
-                                  cdr(toplevel_env));
+    extend(env, sym, symval);
+
+    return symval;
   }
 
   if (car(val) == progn_p) {
@@ -495,7 +504,7 @@ struct value_t* eval(struct value_t* val, struct value_t* env) {
   case INT:
     return val;
   case SYMBOL:
-    tmp = assoc(val, env);
+    tmp = find_in_env(val, env);
     if (tmp == nil_p)
       die("Unbound symbol: %s\n", val->symbol.name);
     return cdr(tmp);
@@ -564,18 +573,19 @@ void init_env() {
   REGISTER_SYMBOL(setf);
   REGISTER_SYMBOL(define);
 
-  REGISTER_PRIMITIVE("cons", primitive_cons);
-  REGISTER_PRIMITIVE("car", primitive_car);
-  REGISTER_PRIMITIVE("cdr" ,primitive_cdr);
-  REGISTER_PRIMITIVE("+" ,primitive_plus);
-  REGISTER_PRIMITIVE("-" ,primitive_minus);
+  extend(toplevel_env, intern("nil"), nil_p);
+  extend(toplevel_env, intern("cons"), makeprimitive(primitive_cons));
+  extend(toplevel_env, intern("car"), makeprimitive(primitive_car));
+  extend(toplevel_env, intern("cdr"), makeprimitive(primitive_cdr));
+  extend(toplevel_env, intern("+"), makeprimitive(primitive_plus));
+  extend(toplevel_env, intern("-"), makeprimitive(primitive_minus));
 }
 
 
 int main() {
   init_env();
 
-  const char* str = "((lambda (x) (setf x 3) (+ x 1)) 2) nil";
+  const char* str = "(define y 1) ((lambda (x) (setf x 3) (+ x y)) 2)";
   struct value_t* val = read_multiple(str);
 
   const char* res = print(val);
