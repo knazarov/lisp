@@ -83,6 +83,22 @@ char token_buf[TOKEN_BUF_SIZE];
 size_t token_buf_used = 0;
 
 
+char *strdup(const char *s) {
+    size_t size = strlen(s) + 1;
+    char *p = malloc(size);
+    if (p) {
+        memcpy(p, s, size);
+    }
+    return p;
+}
+
+char *ltoa(long val) {
+  char buf[32];
+
+  sprintf(buf, "%li", val);
+  return strdup(buf);
+}
+
 int die(const char *format, ...)
 {
     va_list args;
@@ -357,8 +373,7 @@ const char* print(struct value_t* obj) {
   case SYMBOL:
     return strdup(obj->symbol.name);
   case INT:
-    asprintf(&ret, "%li", obj->int_value);
-    return ret;
+    return ltoa(obj->int_value);
   case PROC:
     return strdup("#<PROC>");
   case PRIMITIVE:
