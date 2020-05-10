@@ -26,12 +26,19 @@ struct symbol_t {
   char* name;
 };
 
+struct proc_t {
+  struct value_t* params;
+  struct value_t* body;
+  struct value_t* env;
+};
+
 struct value_t {
   enum type_t type;
 
   union {
     struct cons_t cons;
     struct symbol_t symbol;
+    struct proc_t proc;
     long int_value;
     primitive_op_t primitive_op;
   };
@@ -60,6 +67,7 @@ DEFSYM(progn);
 DEFSYM(cons);
 DEFSYM(car);
 DEFSYM(cdr);
+DEFSYM(setf);
 
 struct value_t *symbols = &nil_v;
 struct value_t *toplevel_env = &nil_v;
@@ -91,6 +99,24 @@ struct value_t *cons(struct value_t* car, struct value_t* cdr) {
   return ret;
 }
 
+int is_nil(struct value_t* val) {
+  return val == nil_p;
+}
+
+struct value_t *car(struct value_t* val) {
+  if (val == nil_p)
+    return nil_p;
+
+  return val->cons.car;
+}
+
+struct value_t *cdr(struct value_t* val) {
+  if (val == nil_p)
+    return nil_p;
+
+  return val->cons.cdr;
+}
+
 struct value_t* makeint(long val) {
   struct value_t *ret = malloc(sizeof(struct value_t));
   *ret = (struct value_t){.type = INT, .int_value = val};
@@ -112,23 +138,18 @@ struct value_t* makeprimitive(primitive_op_t op) {
   return ret;
 }
 
-int is_nil(struct value_t* val) {
-  return val == nil_p;
+struct value_t* makeproc(struct value_t* params,
+                         struct value_t* body,
+                         struct value_t * env) {
+  struct value_t *ret = malloc(sizeof(struct value_t));
+  *ret = (struct value_t){.type = PROC,
+                          .proc.params = params,
+                          .proc.body = body,
+                          .proc.env = env};
+
+  return ret;
 }
 
-struct value_t *car(struct value_t* val) {
-  if (val == nil_p)
-    return nil_p;
-
-  return val->cons.car;
-}
-
-struct value_t *cdr(struct value_t* val) {
-  if (val == nil_p)
-    return nil_p;
-
-  return val->cons.cdr;
-}
 
 struct value_t* find_symbol(const char* name) {
   struct value_t* sym;
@@ -315,6 +336,19 @@ struct value_t* extend(struct value_t* env,
               env);
 }
 
+struct value_t* multiple_extend(struct value_t* env,
+                                struct value_t* symbols,
+                                struct value_t* values) {
+  struct value_t* res = env;
+  struct value_t* sym = symbols;
+  struct value_t* val = values;
+  for (;sym != nil_p && val != nil_p; sym = cdr(sym), val=cdr(val)) {
+    res = cons(cons(car(sym), car(val)), res);
+  }
+
+  return res;
+}
+
 struct value_t* assoc(struct value_t* symbol, struct value_t* alist) {
   if (symbol == nil_p || alist == nil_p)
     return nil_p;
@@ -359,6 +393,22 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
     return car(cdr(val));
   }
 
+  if (car(val) == setf_p) {
+    struct value_t* sym = car(cdr(val));
+    struct value_t* symval = car(cdr(cdr(val)));
+
+    if (sym == nil_p || sym->type != SYMBOL)
+      die("setf expects a symbol");
+
+    struct value_t* tmp = assoc(sym, env);
+    if (tmp == nil_p)
+      die("Unbound symbol: %s\n", val->symbol.name);
+
+    tmp->cons.cdr = symval;
+
+    return symval;
+  }
+
   if (car(val) == progn_p) {
     struct value_t* tmp = cdr(val);
     for (;;) {
@@ -370,6 +420,10 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
     return nil_p;
   }
 
+  if (car(val) == lambda_p) {
+    return makeproc(car(cdr(val)), cdr(cdr(val)), env);
+  }
+
   struct value_t* proc = eval(car(val), env);
   struct value_t* params = eval_list(cdr(val), env);
 
@@ -378,7 +432,12 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
   }
 
   if (proc->type == PROC) {
-    // not implemented yet
+    struct value_t* new_env = multiple_extend(env,
+                                              proc->proc.params,
+                                              params);
+
+    return eval(cons(progn_p, proc->proc.body),
+                new_env);
   }
 
   die("Unsupported procedure type");
@@ -460,6 +519,7 @@ void init_env() {
   REGISTER_SYMBOL(if);
   REGISTER_SYMBOL(lambda);
   REGISTER_SYMBOL(progn);
+  REGISTER_SYMBOL(setf);
 
   REGISTER_PRIMITIVE("cons", primitive_cons);
   REGISTER_PRIMITIVE("car", primitive_car);
@@ -472,7 +532,7 @@ void init_env() {
 int main() {
   init_env();
 
-  const char* str = "(- 1)";
+  const char* str = "((lambda (x) (setf x 3) (+ x 1)) 2)";
   struct value_t* val = read(str);
 
   const char* res = print(val);
