@@ -200,13 +200,14 @@ const char* gettoken(const char** strp) {
   token_buf_used = 0;
 
   do {
-    if (*p == '\0') {
-      return 0;
-    }
-
     if (isspace(*p))
       ++p;
   } while(isspace(*p));
+
+  if (*p == '\0') {
+    return 0;
+  }
+
 
   add_to_token_buf(*p);
   if (*p == '(' || *p == ')' || *p == '\'') {
@@ -450,7 +451,7 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
 
   if (car(val) == define_p) {
     struct value_t* sym = car(cdr(val));
-    struct value_t* symval = car(cdr(cdr(val)));
+    struct value_t* symval = eval(car(cdr(cdr(val))), env);
 
     if (sym == nil_p || sym->type != SYMBOL)
       die("define expects a symbol");
@@ -562,6 +563,57 @@ struct value_t* primitive_minus(struct value_t* val) {
   return makeint(sum);
 }
 
+struct value_t* primitive_mul(struct value_t* val) {
+  long mul = 1;
+
+  for (;val!=nil_p; val=cdr(val)) {
+    if (car(val)->type != INT)
+      die("Can't multiply non-integer values");
+
+    mul = mul * car(val)->int_value;
+  }
+
+  return makeint(mul);
+}
+
+struct value_t* primitive_div(struct value_t* val) {
+  if (val == nil_p)
+    die("Need at least 1 integer to compare");
+  if (car(val)->type != INT)
+    die("Can't add non-integer values");
+
+  long res = car(val)->int_value;
+
+  for (val=cdr(val); val!=nil_p; val=cdr(val)) {
+    if (car(val)->type != INT)
+      die("Can't divide non-integer values");
+
+    res = res / car(val)->int_value;
+  }
+
+  return makeint(res);
+}
+
+
+struct value_t* primitive_equals(struct value_t* val) {
+  if (val == nil_p)
+    die("Need at least 1 integer to compare");
+  if (car(val)->type != INT)
+    die("Can't add non-integer values");
+
+  long res = car(val)->int_value;
+
+  for (;val!=nil_p; val=cdr(val)) {
+    if (car(val)->type != INT)
+      die("Can't compare non-integer values");
+
+    if (res != car(val)->int_value)
+      return nil_p;
+  }
+
+  return t_p;
+}
+
 
 void init_env() {
   REGISTER_SYMBOL(nil);
@@ -574,28 +626,52 @@ void init_env() {
   REGISTER_SYMBOL(define);
 
   extend(toplevel_env, intern("nil"), nil_p);
+  extend(toplevel_env, intern("t"), t_p);
+
   extend(toplevel_env, intern("cons"), makeprimitive(primitive_cons));
   extend(toplevel_env, intern("car"), makeprimitive(primitive_car));
   extend(toplevel_env, intern("cdr"), makeprimitive(primitive_cdr));
   extend(toplevel_env, intern("+"), makeprimitive(primitive_plus));
   extend(toplevel_env, intern("-"), makeprimitive(primitive_minus));
+  extend(toplevel_env, intern("="), makeprimitive(primitive_equals));
+  extend(toplevel_env, intern("*"), makeprimitive(primitive_mul));
+  extend(toplevel_env, intern("/"), makeprimitive(primitive_div));
 }
 
 
-int main() {
+const char* read_file(const char* filename) {
+  FILE *f = fopen(filename, "rb");
+  fseek(f, 0, SEEK_END);
+  long fsize = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  char *string = malloc(fsize + 1);
+  fread(string, 1, fsize, f);
+  fclose(f);
+
+  string[fsize] = 0;
+
+  return string;
+}
+
+int main(int argc, char** argv) {
   init_env();
 
-  const char* str = "(define y 1) ((lambda (x) (setf x 3) (+ x y)) 2)";
+  if (argc == 1)
+    die("Usage: lisp <filename>\n");
+
+  const char* str = read_file(argv[1]);
+  //  printf("code: %s\n", str);
   struct value_t* val = read_multiple(str);
 
-  const char* res = print(val);
-  printf("parsed code: %s\n", res);
-  free((void*)res);
+  //  const char* res = print(val);
+  //  printf("parsed code: %s\n", res);
+  //  free((void*)res);
 
   val = eval(val, toplevel_env);
 
-  res = print(val);
-  printf("result: %s\n", res);
+  const char* res = print(val);
+  printf("%s\n", res);
   free((void*)res);
 
   return 0;
