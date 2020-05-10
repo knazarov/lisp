@@ -419,6 +419,40 @@ struct value_t* primitive_cdr(struct value_t* val) {
   return cdr(car(val));
 }
 
+struct value_t* primitive_plus(struct value_t* val) {
+  long sum = 0;
+
+  for (;val!=nil_p; val=cdr(val)) {
+    if (car(val)->type != INT)
+      die("Can't add non-integer values");
+
+    sum = sum + car(val)->int_value;
+  }
+
+  return makeint(sum);
+}
+
+struct value_t* primitive_minus(struct value_t* val) {
+  long sum = 0;
+  size_t count = 0;
+
+  for (;val!=nil_p; val=cdr(val), count=count+1) {
+    if (car(val)->type != INT)
+      die("Can't add non-integer values");
+
+    if (count == 0)
+      sum = sum + car(val)->int_value;
+    else
+      sum = sum - car(val)->int_value;
+  }
+
+  if (count == 1)
+    return makeint(-sum);
+
+  return makeint(sum);
+}
+
+
 void init_env() {
   REGISTER_SYMBOL(nil);
   REGISTER_SYMBOL(t);
@@ -430,13 +464,15 @@ void init_env() {
   REGISTER_PRIMITIVE("cons", primitive_cons);
   REGISTER_PRIMITIVE("car", primitive_car);
   REGISTER_PRIMITIVE("cdr" ,primitive_cdr);
+  REGISTER_PRIMITIVE("+" ,primitive_plus);
+  REGISTER_PRIMITIVE("-" ,primitive_minus);
 }
 
 
 int main() {
   init_env();
 
-  const char* str = "(progn 1 2 (cdr (cons 3 4)))";
+  const char* str = "(- 1)";
   struct value_t* val = read(str);
 
   const char* res = print(val);
