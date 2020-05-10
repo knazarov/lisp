@@ -2,6 +2,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 enum type_t {
     SYMBOL,
@@ -37,23 +38,49 @@ struct value_t {
 };
 
 
+#define DEFSYM(symname) \
+  struct value_t symname##_v = {.type=SYMBOL, .symbol.name = #symname }; \
+  struct value_t* symname##_p = &symname##_v;
 
-struct value_t nil_v = {.type=SYMBOL, .symbol.name = "nil"};
-struct value_t* nil = &nil_v;
+#define REGISTER_SYMBOL(symname) \
+  symbols = cons(symname##_p, symbols);
 
-struct value_t t_v = {.type=SYMBOL, .symbol.name = "t"};
-struct value_t* t = &t_v;
+#define REGISTER_PRIMITIVE(symname, fun)  \
+  toplevel_env = extend(toplevel_env, \
+                        intern(symname), \
+                        makeprimitive(fun));
 
-struct value_t quote_v = {.type=SYMBOL, .symbol.name = "quote"};
-struct value_t* quote = &quote_v;
+
+DEFSYM(nil);
+DEFSYM(t);
+DEFSYM(quote);
+DEFSYM(if);
+DEFSYM(lambda);
+DEFSYM(progn);
+DEFSYM(cons);
+DEFSYM(car);
+DEFSYM(cdr);
 
 struct value_t *symbols = &nil_v;
+struct value_t *toplevel_env = &nil_v;
 
 
 #define TOKEN_BUF_SIZE 256
 char token_buf[TOKEN_BUF_SIZE];
 size_t token_buf_used = 0;
 
+
+int die(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+
+    vprintf(format, args);
+
+    va_end(args);
+
+    exit(1);
+}
 
 
 struct value_t *cons(struct value_t* car, struct value_t* cdr) {
@@ -78,15 +105,28 @@ struct value_t* makesym(const char* name) {
   return ret;
 }
 
+struct value_t* makeprimitive(primitive_op_t op) {
+  struct value_t *ret = malloc(sizeof(struct value_t));
+  *ret = (struct value_t){.type = PRIMITIVE, .primitive_op = op};
+
+  return ret;
+}
+
 int is_nil(struct value_t* val) {
-  return val == nil;
+  return val == nil_p;
 }
 
 struct value_t *car(struct value_t* val) {
+  if (val == nil_p)
+    return nil_p;
+
   return val->cons.car;
 }
 
 struct value_t *cdr(struct value_t* val) {
+  if (val == nil_p)
+    return nil_p;
+
   return val->cons.cdr;
 }
 
@@ -94,15 +134,15 @@ struct value_t* find_symbol(const char* name) {
   struct value_t* sym;
   for (sym = symbols; !is_nil(sym); sym = cdr(sym)) {
     if (strcmp(name, car(sym)->symbol.name) == 0)
-      return sym;
+      return car(sym);
   }
-  return nil;
+  return nil_p;
 }
 
 struct value_t* intern(const char* name) {
   struct value_t* sym = find_symbol(name);
 
-  if (sym != nil)
+  if (sym != nil_p)
     return sym;
 
   sym = makesym(name);
@@ -179,7 +219,7 @@ struct value_t* readlist(const char** strp) {
   const char* token = gettoken(strp);
 
   if (strcmp(token, ")") == 0) {
-    return nil;
+    return nil_p;
   }
 
   *strp = saved;
@@ -199,7 +239,7 @@ struct value_t* readobj(const char** strp) {
   }
 
   if (strcmp(token, "\'") == 0) {
-    return cons(quote, cons(readobj(strp), nil));
+    return cons(quote_p, cons(readobj(strp), nil_p));
   }
 
   if (is_number(token)) {
@@ -236,7 +276,7 @@ const char* print(struct value_t* obj) {
       concat(&ret, s);
       free((void*)s);
 
-      if (cdr(obj) == nil) {
+      if (cdr(obj) == nil_p) {
         concat(&ret, ")");
         break;
       }
@@ -245,7 +285,7 @@ const char* print(struct value_t* obj) {
 
       if (obj->type != CONS) {
         concat(&ret, " . ");
-        const char* s = print(car(obj));
+        const char* s = print(obj);
         concat(&ret, s);
         free((void*)s);
         concat(&ret, ")");
@@ -267,15 +307,146 @@ const char* print(struct value_t* obj) {
   }
 }
 
-int main() {
-  const char* str = "(+ 1 2 -34 asf '(5 6))";
+struct value_t* extend(struct value_t* env,
+                       struct value_t* symbol,
+                       struct value_t* value) {
 
+  return cons(cons(symbol, value),
+              env);
+}
+
+struct value_t* assoc(struct value_t* symbol, struct value_t* alist) {
+  if (symbol == nil_p || alist == nil_p)
+    return nil_p;
+
+
+  struct value_t* entry;
+  for (entry = alist; !is_nil(entry); entry = cdr(entry)) {
+    if (car(car(entry)) == symbol)
+      return car(entry);
+  }
+
+  return nil_p;
+}
+
+
+struct value_t* eval(struct value_t* val, struct value_t* env);
+
+
+struct value_t* eval_list(struct value_t* val, struct value_t* env) {
+  if (val == nil_p)
+    return nil_p;
+
+  return cons(eval(car(val), env),
+              eval_list(cdr(val), env));
+}
+
+struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
+  if (car(val) == if_p) {
+    struct value_t* condition = cdr(val);
+    struct value_t* action = cdr(cdr(val));
+    struct value_t* alternative = cdr(cdr(cdr(val)));
+
+    if (eval(car(condition), env) != nil_p)
+      return eval(car(action), env);
+    else if (alternative != nil_p)
+      return eval(car(alternative), env);
+
+    return nil_p;
+  }
+
+  if (car(val) == quote_p) {
+    return car(cdr(val));
+  }
+
+  if (car(val) == progn_p) {
+    struct value_t* tmp = cdr(val);
+    for (;;) {
+      struct value_t* res = eval(car(tmp), env);
+      if (cdr(tmp) == nil_p)
+        return res;
+      tmp=cdr(tmp);
+    }
+    return nil_p;
+  }
+
+  struct value_t* proc = eval(car(val), env);
+  struct value_t* params = eval_list(cdr(val), env);
+
+  if (proc->type == PRIMITIVE) {
+    return proc->primitive_op(params);
+  }
+
+  if (proc->type == PROC) {
+    // not implemented yet
+  }
+
+  die("Unsupported procedure type");
+  return nil_p;
+}
+
+struct value_t* eval(struct value_t* val, struct value_t* env) {
+  if (val == nil_p)
+    return nil_p;
+
+  struct value_t* tmp;
+  switch(val->type) {
+  case INT:
+    return val;
+  case SYMBOL:
+    tmp = assoc(val, env);
+    if (tmp == nil_p)
+      die("Unbound symbol: %s\n", val->symbol.name);
+    return cdr(tmp);
+  case PRIMITIVE:
+    return val;
+  case PROC:
+    return val;
+  case CONS:
+    return eval_cons(val, env);
+  };
+}
+
+struct value_t* primitive_cons(struct value_t* val) {
+  return cons(car(val), car(cdr(val)));
+}
+
+struct value_t* primitive_car(struct value_t* val) {
+  return car(car(val));
+}
+
+struct value_t* primitive_cdr(struct value_t* val) {
+  return cdr(car(val));
+}
+
+void init_env() {
+  REGISTER_SYMBOL(nil);
+  REGISTER_SYMBOL(t);
+  REGISTER_SYMBOL(quote);
+  REGISTER_SYMBOL(if);
+  REGISTER_SYMBOL(lambda);
+  REGISTER_SYMBOL(progn);
+
+  REGISTER_PRIMITIVE("cons", primitive_cons);
+  REGISTER_PRIMITIVE("car", primitive_car);
+  REGISTER_PRIMITIVE("cdr" ,primitive_cdr);
+}
+
+
+int main() {
+  init_env();
+
+  const char* str = "(progn 1 2 (cdr (cons 3 4)))";
   struct value_t* val = read(str);
 
   const char* res = print(val);
+  printf("code: %s\n", res);
+  free((void*)res);
 
-  printf("%s\n", res);
+  val = eval(val, toplevel_env);
 
+  res = print(val);
+  printf("result: %s\n", res);
   free((void*)res);
 
   return 0;
