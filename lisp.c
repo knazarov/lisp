@@ -32,6 +32,11 @@ struct proc_t {
   struct value_t* env;
 };
 
+struct env_t {
+  struct value_t* env;
+  struct env_t* parent;
+};
+
 struct value_t {
   enum type_t type;
 
@@ -68,6 +73,7 @@ DEFSYM(cons);
 DEFSYM(car);
 DEFSYM(cdr);
 DEFSYM(setf);
+DEFSYM(define);
 
 struct value_t *symbols = &nil_v;
 struct value_t *toplevel_env = &nil_v;
@@ -239,6 +245,9 @@ struct value_t* readlist(const char** strp) {
   const char* saved = *strp;
   const char* token = gettoken(strp);
 
+  if (token == 0)
+    die("Malformed list");
+
   if (strcmp(token, ")") == 0) {
     return nil_p;
   }
@@ -254,6 +263,9 @@ struct value_t* readlist(const char** strp) {
 
 struct value_t* readobj(const char** strp) {
   const char* token = gettoken(strp);
+
+  if (token == 0)
+    return nil_p;
 
   if (strcmp(token, "(") == 0) {
     return readlist(strp);
@@ -274,6 +286,25 @@ struct value_t* read(const char* str) {
   const char* strp = str;
 
   return readobj(&strp);
+}
+
+struct value_t* readobj_multiple(const char** strp) {
+  struct value_t* res = readobj(strp);
+
+  if (res == nil_p)
+    return nil_p;
+
+  return cons(res, readobj_multiple(strp));
+}
+
+struct value_t* read_multiple(const char* str) {
+  const char* strp = str;
+
+  struct value_t* res = readobj_multiple(&strp);
+  if (res == nil_p)
+    return nil_p;
+
+  return cons(progn_p, res);
 }
 
 void concat(char** lhs, const char* rhs) {
@@ -409,6 +440,17 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
     return symval;
   }
 
+  if (car(val) == define_p) {
+    struct value_t* sym = car(cdr(val));
+    struct value_t* symval = car(cdr(cdr(val)));
+
+    if (sym == nil_p || sym->type != SYMBOL)
+      die("define expects a symbol");
+
+    toplevel_env->cons.cdr = cons(cons(sym, symval),
+                                  cdr(toplevel_env));
+  }
+
   if (car(val) == progn_p) {
     struct value_t* tmp = cdr(val);
     for (;;) {
@@ -520,6 +562,7 @@ void init_env() {
   REGISTER_SYMBOL(lambda);
   REGISTER_SYMBOL(progn);
   REGISTER_SYMBOL(setf);
+  REGISTER_SYMBOL(define);
 
   REGISTER_PRIMITIVE("cons", primitive_cons);
   REGISTER_PRIMITIVE("car", primitive_car);
@@ -532,11 +575,11 @@ void init_env() {
 int main() {
   init_env();
 
-  const char* str = "((lambda (x) (setf x 3) (+ x 1)) 2)";
-  struct value_t* val = read(str);
+  const char* str = "((lambda (x) (setf x 3) (+ x 1)) 2) nil";
+  struct value_t* val = read_multiple(str);
 
   const char* res = print(val);
-  printf("code: %s\n", res);
+  printf("parsed code: %s\n", res);
   free((void*)res);
 
   val = eval(val, toplevel_env);
