@@ -44,6 +44,59 @@ struct value_t {
   };
 };
 
+#define SLAB_SIZE 10
+
+struct memory_slab_t {
+  struct value_t data[SLAB_SIZE];
+  char used_blocks[SLAB_SIZE];
+  char reachable_blocks[SLAB_SIZE];
+  struct memory_slab_t* parent;
+};
+
+struct memory_slab_t* toplevel_slab = 0;
+
+int die(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+
+    vprintf(format, args);
+
+    va_end(args);
+
+    exit(1);
+}
+
+struct value_t* slab_alloc() {
+  struct memory_slab_t* slab;
+  for (slab = toplevel_slab; slab != 0; slab = slab->parent) {
+    for (size_t i = 0; i<SLAB_SIZE; ++i) {
+      if (slab->used_blocks[i] == 0) {
+        slab->used_blocks[i] = 1;
+        return &slab->data[i];
+      }
+    }
+  }
+
+  toplevel_slab = malloc(sizeof(struct memory_slab_t));
+  memset(toplevel_slab, 0, sizeof(struct memory_slab_t));
+
+  return slab_alloc();
+}
+
+void slab_free(struct value_t* val) {
+  struct memory_slab_t* slab;
+  for (slab = toplevel_slab; slab != 0; slab = slab->parent) {
+    if (val >= slab->data && val <= &slab->data[SLAB_SIZE]) {
+      size_t pos = (val - slab->data) / sizeof(struct value_t);
+      slab->used_blocks[pos] = 0;
+      return;
+    }
+  }
+
+  die("Can't free memory");
+}
+
 
 #define DEFSYM(symname) \
   struct value_t symname##_v = {.type=SYMBOL, .symbol.name = #symname }; \
@@ -98,19 +151,6 @@ char *ltoa(long val) {
   sprintf(buf, "%li", val);
   return strdup(buf);
 }
-
-int die(const char *format, ...)
-{
-    va_list args;
-    va_start(args, format);
-
-    vprintf(format, args);
-
-    va_end(args);
-
-    exit(1);
-}
-
 
 struct value_t *cons(struct value_t* car, struct value_t* cdr) {
   struct value_t *ret = malloc(sizeof(struct value_t));
@@ -671,6 +711,9 @@ const char* read_file(const char* filename) {
 
 int main(int argc, char** argv) {
   init_env();
+
+  struct value_t* v = slab_alloc();
+  slab_free(v);
 
   if (argc == 1)
     die("Usage: lisp <filename>\n");
