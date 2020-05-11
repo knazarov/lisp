@@ -44,7 +44,7 @@ struct value_t {
   };
 };
 
-#define SLAB_SIZE 10
+#define SLAB_SIZE 1024
 
 struct memory_slab_t {
   struct value_t data[SLAB_SIZE];
@@ -52,6 +52,8 @@ struct memory_slab_t {
   char reachable_blocks[SLAB_SIZE];
   struct memory_slab_t* parent;
 };
+
+size_t number_of_allocations = 0;
 
 struct memory_slab_t* toplevel_slab = 0;
 
@@ -73,13 +75,16 @@ struct value_t* slab_alloc() {
     for (size_t i = 0; i<SLAB_SIZE; ++i) {
       if (slab->used_blocks[i] == 0) {
         slab->used_blocks[i] = 1;
+        number_of_allocations++;
         return &slab->data[i];
       }
     }
   }
 
-  toplevel_slab = malloc(sizeof(struct memory_slab_t));
-  memset(toplevel_slab, 0, sizeof(struct memory_slab_t));
+  struct memory_slab_t* new_slab = malloc(sizeof(struct memory_slab_t));
+  memset(new_slab, 0, sizeof(struct memory_slab_t));
+  new_slab->parent = toplevel_slab;
+  toplevel_slab = new_slab;
 
   return slab_alloc();
 }
@@ -88,7 +93,7 @@ void slab_free(struct value_t* val) {
   struct memory_slab_t* slab;
   for (slab = toplevel_slab; slab != 0; slab = slab->parent) {
     if (val >= slab->data && val <= &slab->data[SLAB_SIZE]) {
-      size_t pos = (val - slab->data) / sizeof(struct value_t);
+      size_t pos = (val - slab->data);
       slab->used_blocks[pos] = 0;
       return;
     }
@@ -153,7 +158,7 @@ char *ltoa(long val) {
 }
 
 struct value_t *cons(struct value_t* car, struct value_t* cdr) {
-  struct value_t *ret = malloc(sizeof(struct value_t));
+  struct value_t *ret = slab_alloc();
 
   *ret = (struct value_t){.type = CONS, .cons.car = car, .cons.cdr = cdr};
 
@@ -179,21 +184,21 @@ struct value_t *cdr(struct value_t* val) {
 }
 
 struct value_t* makeint(long val) {
-  struct value_t *ret = malloc(sizeof(struct value_t));
+  struct value_t *ret = slab_alloc();
   *ret = (struct value_t){.type = INT, .int_value = val};
 
   return ret;
 }
 
 struct value_t* makesym(const char* name) {
-  struct value_t *ret = malloc(sizeof(struct value_t));
+  struct value_t *ret = slab_alloc();
   *ret = (struct value_t){.type = SYMBOL, .symbol.name = strdup(name)};
 
   return ret;
 }
 
 struct value_t* makeprimitive(primitive_op_t op) {
-  struct value_t *ret = malloc(sizeof(struct value_t));
+  struct value_t *ret = slab_alloc();
   *ret = (struct value_t){.type = PRIMITIVE, .primitive_op = op};
 
   return ret;
@@ -202,7 +207,7 @@ struct value_t* makeprimitive(primitive_op_t op) {
 struct value_t* makeproc(struct value_t* params,
                          struct value_t* body,
                          struct value_t * env) {
-  struct value_t *ret = malloc(sizeof(struct value_t));
+  struct value_t *ret = slab_alloc();
   *ret = (struct value_t){.type = PROC,
                           .proc.params = params,
                           .proc.body = body,
@@ -212,7 +217,7 @@ struct value_t* makeproc(struct value_t* params,
 }
 
 struct value_t *makeenv(struct value_t* parent) {
-  struct value_t *ret = malloc(sizeof(struct value_t));
+  struct value_t *ret = slab_alloc();
   *ret = (struct value_t){.type = CONS,
                           .cons.car = nil_p,
                           .cons.cdr = parent};
@@ -715,22 +720,34 @@ int main(int argc, char** argv) {
   struct value_t* v = slab_alloc();
   slab_free(v);
 
-  if (argc == 1)
-    die("Usage: lisp <filename>\n");
 
-  const char* str = read_file(argv[1]);
-  //  printf("code: %s\n", str);
+  const char* filename = 0;
+  int verbose = 0;
+
+  for (int i = 1; i<argc; i++) {
+    if (strcmp(argv[i], "-v") == 0)
+      verbose = 1;
+    else
+      filename = argv[i];
+  }
+
+  if (filename == 0)
+    die("Usage: lisp [-v] <filename>\n");
+
+
+  const char* str = read_file(filename);
   struct value_t* val = read_multiple(str);
-
-  //  const char* res = print(val);
-  //  printf("parsed code: %s\n", res);
-  //  free((void*)res);
+  free((void*)str);
 
   val = eval(val, toplevel_env);
 
   const char* res = print(val);
   printf("%s\n", res);
   free((void*)res);
+
+  if (verbose) {
+    printf("memory allocations: %ld\n", number_of_allocations);
+  }
 
   return 0;
 }
