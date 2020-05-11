@@ -198,11 +198,14 @@ void gc_mark(struct value_t* val) {
     break;
   case CONS:
     for (tmp=val; tmp != nil_p; tmp = cdr(tmp)) {
-      gc_mark(tmp);
-      if (tmp->type == CONS)
+      if (tmp->type == CONS) {
+        tmp->gc_flag = 1;
         gc_mark(car(tmp));
-      else
+      }
+      else {
+        gc_mark(tmp);
         break;
+      }
     }
     break;
   case PROC:
