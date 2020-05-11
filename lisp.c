@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+#define SLAB_SIZE 1024
+#define TOKEN_BUF_SIZE 256
+
 enum type_t {
     SYMBOL,
     CONS,
@@ -44,7 +47,6 @@ struct value_t {
   };
 };
 
-#define SLAB_SIZE 1024
 
 struct memory_slab_t {
   struct value_t data[SLAB_SIZE];
@@ -104,16 +106,12 @@ void slab_free(struct value_t* val) {
 
 
 #define DEFSYM(symname) \
-  struct value_t symname##_v = {.type=SYMBOL, .symbol.name = #symname }; \
-  struct value_t* symname##_p = &symname##_v;
+  struct value_t* symname##_p = 0;
 
 #define REGISTER_SYMBOL(symname) \
+  symname##_p = slab_alloc(); \
+  *symname##_p = (struct value_t){.type=SYMBOL, .symbol.name = #symname };  \
   symbols = cons(symname##_p, symbols);
-
-#define REGISTER_PRIMITIVE(symname, fun)  \
-  toplevel_env = extend(toplevel_env, \
-                        intern(symname), \
-                        makeprimitive(fun));
 
 
 DEFSYM(nil);
@@ -128,15 +126,9 @@ DEFSYM(cdr);
 DEFSYM(setf);
 DEFSYM(define);
 
-struct value_t *symbols = &nil_v;
+struct value_t *symbols = 0;
+struct value_t *toplevel_env = 0;
 
-struct value_t toplevel_env_v = {.type = CONS,
-                                 .cons.car = &nil_v,
-                                 .cons.cdr = &nil_v};
-struct value_t *toplevel_env = &toplevel_env_v;
-
-
-#define TOKEN_BUF_SIZE 256
 char token_buf[TOKEN_BUF_SIZE];
 size_t token_buf_used = 0;
 
@@ -676,7 +668,11 @@ struct value_t* primitive_equals(struct value_t* val) {
 
 
 void init_env() {
-  REGISTER_SYMBOL(nil);
+  nil_p = slab_alloc();
+  nil_p->type = SYMBOL;
+  nil_p->symbol.name = "nil";
+  symbols = cons(nil_p, nil_p);
+
   REGISTER_SYMBOL(t);
   REGISTER_SYMBOL(quote);
   REGISTER_SYMBOL(if);
@@ -684,6 +680,8 @@ void init_env() {
   REGISTER_SYMBOL(progn);
   REGISTER_SYMBOL(setf);
   REGISTER_SYMBOL(define);
+
+  toplevel_env = cons(nil_p, nil_p);
 
   extend(toplevel_env, intern("nil"), nil_p);
   extend(toplevel_env, intern("t"), t_p);
