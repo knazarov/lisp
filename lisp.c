@@ -14,7 +14,8 @@ enum type_t {
   CONS,
   INT,
   PROC,
-  PRIMITIVE
+  PRIMITIVE,
+  MACRO
 };
 
 struct value_t;
@@ -85,6 +86,7 @@ DEFSYM(car);
 DEFSYM(cdr);
 DEFSYM(setf);
 DEFSYM(define);
+DEFSYM(defmacro);
 
 struct value_t *symbols = 0;
 struct value_t *toplevel_env = 0;
@@ -208,6 +210,7 @@ void gc_mark(struct value_t* val) {
       }
     }
     break;
+  case MACRO:
   case PROC:
     gc_mark(val->proc.params);
     gc_mark(val->proc.body);
@@ -287,6 +290,15 @@ struct value_t* makeproc(struct value_t* params,
 
   return ret;
 }
+
+struct value_t* makemacro(struct value_t* params,
+                          struct value_t* body,
+                          struct value_t * env) {
+  struct value_t *ret = makeproc(params, body, env);
+  ret->type = MACRO;
+  return ret;
+}
+
 
 struct value_t *makeenv(struct value_t* parent) {
   struct value_t *ret = slab_alloc();
@@ -495,6 +507,8 @@ const char* print(struct value_t* obj) {
     return strdup("#<PROC>");
   case PRIMITIVE:
     return strdup("#<PRIMITIVE>");
+  case MACRO:
+    return strdup("#<MACRO>");
   case GUARD:
     die("Access to deallocated memory");
     return 0;
@@ -596,6 +610,21 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
     return symval;
   }
 
+  if (car(val) == defmacro_p) {
+    struct value_t* sym = car(cdr(val));
+    struct value_t* params = car(cdr(cdr(val)));
+    struct value_t* body = cdr(cdr(cdr(val)));
+
+    struct value_t* macro = makemacro(params, body, toplevel_env);
+
+    if (sym == nil_p || sym->type != SYMBOL)
+      die("define expects a symbol");
+
+    extend(toplevel_env, sym, macro);
+
+    return macro;
+  }
+
   if (car(val) == progn_p) {
     struct value_t* tmp = cdr(val);
     for (;;) {
@@ -612,19 +641,35 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
   }
 
   struct value_t* proc = eval(car(val), env);
-  struct value_t* params = eval_list(cdr(val), env);
 
   if (proc->type == PRIMITIVE) {
+    struct value_t* params = eval_list(cdr(val), env);
+
     return proc->primitive_op(params);
   }
 
   if (proc->type == PROC) {
+    struct value_t* params = eval_list(cdr(val), env);
+
     struct value_t* new_env = multiple_extend(env,
                                               proc->proc.params,
                                               params);
 
     return eval(cons(progn_p, proc->proc.body),
                 new_env);
+  }
+
+  if (proc->type == MACRO) {
+    struct value_t* params = cdr(val);
+    struct value_t* new_env = multiple_extend(env,
+                                              proc->proc.params,
+                                              params);
+
+    struct value_t* new_form = eval(cons(progn_p, proc->proc.body),
+                                    new_env);
+
+    return eval(new_form,
+                env);
   }
 
   die("Unsupported procedure type");
@@ -656,6 +701,8 @@ struct value_t* eval(struct value_t* val, struct value_t* env) {
   case PRIMITIVE:
     return val;
   case PROC:
+    return val;
+  case MACRO:
     return val;
   case CONS:
     return eval_cons(val, env);
@@ -775,6 +822,7 @@ void init_env() {
   REGISTER_SYMBOL(progn);
   REGISTER_SYMBOL(setf);
   REGISTER_SYMBOL(define);
+  REGISTER_SYMBOL(defmacro);
 
   toplevel_env = cons(nil_p, nil_p);
 
