@@ -6,4 +6,4 @@
       )
     ))
 
-(factorial 6)
+(factorial 20)

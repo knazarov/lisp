@@ -6,13 +6,15 @@
 
 #define SLAB_SIZE 1024
 #define TOKEN_BUF_SIZE 256
+#define GC_THRESHOLD 256
 
 enum type_t {
-    SYMBOL,
-    CONS,
-    INT,
-    PROC,
-    PRIMITIVE
+  GUARD = 0,
+  SYMBOL,
+  CONS,
+  INT,
+  PROC,
+  PRIMITIVE
 };
 
 struct value_t;
@@ -37,6 +39,7 @@ struct proc_t {
 
 struct value_t {
   enum type_t type;
+  char gc_flag;
 
   union {
     struct cons_t cons;
@@ -56,8 +59,40 @@ struct memory_slab_t {
 };
 
 size_t number_of_allocations = 0;
+size_t last_allocations = 0;
 
 struct memory_slab_t* toplevel_slab = 0;
+
+#define DEFSYM(symname) \
+  struct value_t* symname##_p = 0;
+
+#define REGISTER_SYMBOL(symname) \
+  symname##_p = slab_alloc(); \
+  *symname##_p = (struct value_t){.type=SYMBOL, .symbol.name = #symname };  \
+  symbols = cons(symname##_p, symbols);
+
+#define CHECK_GUARD(val) \
+  if ((val)->type == GUARD) die("Access to deallocated memory");
+
+DEFSYM(nil);
+DEFSYM(t);
+DEFSYM(quote);
+DEFSYM(if);
+DEFSYM(lambda);
+DEFSYM(progn);
+DEFSYM(cons);
+DEFSYM(car);
+DEFSYM(cdr);
+DEFSYM(setf);
+DEFSYM(define);
+
+struct value_t *symbols = 0;
+struct value_t *toplevel_env = 0;
+struct value_t *toplevel_code = 0;
+
+char token_buf[TOKEN_BUF_SIZE];
+size_t token_buf_used = 0;
+
 
 int die(const char *format, ...)
 {
@@ -78,6 +113,8 @@ struct value_t* slab_alloc() {
       if (slab->used_blocks[i] == 0) {
         slab->used_blocks[i] = 1;
         number_of_allocations++;
+        last_allocations++;
+        slab->data[i].gc_flag = 0;
         return &slab->data[i];
       }
     }
@@ -91,12 +128,56 @@ struct value_t* slab_alloc() {
   return slab_alloc();
 }
 
+struct value_t *cons(struct value_t* car, struct value_t* cdr) {
+  struct value_t *ret = slab_alloc();
+
+  *ret = (struct value_t){.type = CONS, .cons.car = car, .cons.cdr = cdr};
+
+  return ret;
+}
+
+int is_nil(struct value_t* val) {
+  return val == nil_p;
+}
+
+struct value_t *car(struct value_t* val) {
+  CHECK_GUARD(val);
+
+  if (val == nil_p)
+    return nil_p;
+
+  return val->cons.car;
+}
+
+struct value_t *cdr(struct value_t* val) {
+  CHECK_GUARD(val);
+
+  if (val == nil_p)
+    return nil_p;
+
+  return val->cons.cdr;
+}
+
+size_t memory_used() {
+  size_t res = 0;
+  struct memory_slab_t* slab;
+  for (slab = toplevel_slab; slab != 0; slab = slab->parent) {
+    for (size_t i = 0; i < SLAB_SIZE; i++) {
+      if (slab->used_blocks[i] == 1)
+        res++;
+    }
+  }
+  return res;
+}
+
 void slab_free(struct value_t* val) {
   struct memory_slab_t* slab;
   for (slab = toplevel_slab; slab != 0; slab = slab->parent) {
     if (val >= slab->data && val <= &slab->data[SLAB_SIZE]) {
       size_t pos = (val - slab->data);
       slab->used_blocks[pos] = 0;
+      memset(&slab->data[pos], 0, sizeof(struct value_t));
+
       return;
     }
   }
@@ -104,34 +185,55 @@ void slab_free(struct value_t* val) {
   die("Can't free memory");
 }
 
+void gc_mark(struct value_t* val) {
+  if (val->gc_flag == 1)
+    return;
 
-#define DEFSYM(symname) \
-  struct value_t* symname##_p = 0;
+  val->gc_flag = 1;
 
-#define REGISTER_SYMBOL(symname) \
-  symname##_p = slab_alloc(); \
-  *symname##_p = (struct value_t){.type=SYMBOL, .symbol.name = #symname };  \
-  symbols = cons(symname##_p, symbols);
+  struct value_t* tmp;
+  switch(val->type) {
+  case GUARD:
+    die("Access to deallocated memory");
+    break;
+  case CONS:
+    for (tmp=val; tmp != nil_p; tmp = cdr(tmp)) {
+      gc_mark(tmp);
+      if (tmp->type == CONS)
+        gc_mark(car(tmp));
+      else
+        break;
+    }
+    break;
+  case PROC:
+    gc_mark(val->proc.params);
+    gc_mark(val->proc.body);
+    gc_mark(val->proc.env);
+    break;
+  default:
+    break;
+  };
+}
 
+int need_gc() {
+  return last_allocations > GC_THRESHOLD;
+}
 
-DEFSYM(nil);
-DEFSYM(t);
-DEFSYM(quote);
-DEFSYM(if);
-DEFSYM(lambda);
-DEFSYM(progn);
-DEFSYM(cons);
-DEFSYM(car);
-DEFSYM(cdr);
-DEFSYM(setf);
-DEFSYM(define);
+void gc_sweep() {
+  struct memory_slab_t* slab;
+  for (slab = toplevel_slab; slab != 0; slab = slab->parent) {
+    for (size_t i = 0; i < SLAB_SIZE; i++) {
+      if (slab->used_blocks[i] == 1 && slab->data[i].gc_flag == 0) {
+        slab->used_blocks[i] = 0;
+        memset(&slab->data[i], 0, sizeof(struct value_t));
+      }
+      else
+        slab->data[i].gc_flag = 0;
+    }
+  }
 
-struct value_t *symbols = 0;
-struct value_t *toplevel_env = 0;
-
-char token_buf[TOKEN_BUF_SIZE];
-size_t token_buf_used = 0;
-
+  last_allocations = 0;
+}
 
 char *strdup(const char *s) {
     size_t size = strlen(s) + 1;
@@ -149,31 +251,6 @@ char *ltoa(long val) {
   return strdup(buf);
 }
 
-struct value_t *cons(struct value_t* car, struct value_t* cdr) {
-  struct value_t *ret = slab_alloc();
-
-  *ret = (struct value_t){.type = CONS, .cons.car = car, .cons.cdr = cdr};
-
-  return ret;
-}
-
-int is_nil(struct value_t* val) {
-  return val == nil_p;
-}
-
-struct value_t *car(struct value_t* val) {
-  if (val == nil_p)
-    return nil_p;
-
-  return val->cons.car;
-}
-
-struct value_t *cdr(struct value_t* val) {
-  if (val == nil_p)
-    return nil_p;
-
-  return val->cons.cdr;
-}
 
 struct value_t* makeint(long val) {
   struct value_t *ret = slab_alloc();
@@ -415,6 +492,9 @@ const char* print(struct value_t* obj) {
     return strdup("#<PROC>");
   case PRIMITIVE:
     return strdup("#<PRIMITIVE>");
+  case GUARD:
+    die("Access to deallocated memory");
+    return 0;
   }
 }
 
@@ -552,6 +632,15 @@ struct value_t* eval(struct value_t* val, struct value_t* env) {
   if (val == nil_p)
     return nil_p;
 
+  if (need_gc()) {
+    gc_mark(val);
+    gc_mark(env);
+    gc_mark(toplevel_env);
+    gc_mark(symbols);
+    gc_mark(toplevel_code);
+    gc_sweep();
+  }
+
   struct value_t* tmp;
   switch(val->type) {
   case INT:
@@ -567,6 +656,9 @@ struct value_t* eval(struct value_t* val, struct value_t* env) {
     return val;
   case CONS:
     return eval_cons(val, env);
+  case GUARD:
+    die("Access to deallocated memory");
+    return nil_p;
   };
 }
 
@@ -715,9 +807,8 @@ const char* read_file(const char* filename) {
 int main(int argc, char** argv) {
   init_env();
 
-  struct value_t* v = slab_alloc();
-  slab_free(v);
-
+  //struct value_t* v = slab_alloc();
+  //slab_free(v);
 
   const char* filename = 0;
   int verbose = 0;
@@ -736,6 +827,7 @@ int main(int argc, char** argv) {
   const char* str = read_file(filename);
   struct value_t* val = read_multiple(str);
   free((void*)str);
+  toplevel_code = val;
 
   val = eval(val, toplevel_env);
 
@@ -745,6 +837,8 @@ int main(int argc, char** argv) {
 
   if (verbose) {
     printf("memory allocations: %ld\n", number_of_allocations);
+    printf("memory used: %ld\n", memory_used());
+
   }
 
   return 0;
