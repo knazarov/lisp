@@ -3,6 +3,18 @@
 This lisp was written for fun, and so completely lacks any practical
 purpose.
 
+Features:
+
+- basic lisp operations
+- lambdas
+- closures
+- lexical scope
+- loading code from files
+- simple mark & sweep garbage collector
+
+The implementation consists of a classic list-structured memory, and a
+recursive evaluator.
+
 ## Compiling
 
 You should have a C compiler and `make`. To compile, just run:
