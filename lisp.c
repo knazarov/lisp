@@ -6,7 +6,8 @@
 
 #define SLAB_SIZE 1024
 #define TOKEN_BUF_SIZE 256
-#define GC_THRESHOLD 256
+#define GC_THRESHOLD 1
+#define GC_ROOT_STACK_SIZE 1024
 
 enum type_t {
   GUARD = 0,
@@ -63,6 +64,8 @@ size_t number_of_allocations = 0;
 size_t last_allocations = 0;
 
 struct memory_slab_t* toplevel_slab = 0;
+struct value_t* gc_root_stack[GC_ROOT_STACK_SIZE];
+size_t gc_root_stack_pos = 0;
 
 #define DEFSYM(symname) \
   struct value_t* symname##_p = 0;
@@ -187,7 +190,18 @@ void slab_free(struct value_t* val) {
   die("Can't free memory");
 }
 
-void gc_mark(struct value_t* val) {
+void gc_root_push(struct value_t* val) {
+  gc_root_stack[gc_root_stack_pos++] = val;
+  if (gc_root_stack_pos >= GC_ROOT_STACK_SIZE)
+    die("Out of gc root stack");
+}
+
+void gc_root_pop() {
+  gc_root_stack_pos--;
+}
+
+
+void gc_mark_val(struct value_t* val) {
   if (val->gc_flag == 1)
     return;
 
@@ -202,23 +216,29 @@ void gc_mark(struct value_t* val) {
     for (tmp=val; tmp != nil_p; tmp = cdr(tmp)) {
       if (tmp->type == CONS) {
         tmp->gc_flag = 1;
-        gc_mark(car(tmp));
+        gc_mark_val(car(tmp));
       }
       else {
-        gc_mark(tmp);
+        gc_mark_val(tmp);
         break;
       }
     }
     break;
   case MACRO:
   case PROC:
-    gc_mark(val->proc.params);
-    gc_mark(val->proc.body);
-    gc_mark(val->proc.env);
+    gc_mark_val(val->proc.params);
+    gc_mark_val(val->proc.body);
+    gc_mark_val(val->proc.env);
     break;
   default:
     break;
   };
+}
+
+void gc_mark() {
+  for (size_t i=0; i<gc_root_stack_pos; i++) {
+    gc_mark_val(gc_root_stack[i]);
+  }
 }
 
 int need_gc() {
@@ -239,6 +259,11 @@ void gc_sweep() {
   }
 
   last_allocations = 0;
+}
+
+void collectgarbage() {
+  gc_mark();
+  gc_sweep();
 }
 
 char *strdup(const char *s) {
@@ -314,13 +339,13 @@ struct value_t* find_symbol(const char* name) {
     if (strcmp(name, car(sym)->symbol.name) == 0)
       return car(sym);
   }
-  return nil_p;
+  return 0;
 }
 
 struct value_t* intern(const char* name) {
   struct value_t* sym = find_symbol(name);
 
-  if (sym != nil_p)
+  if (sym != 0)
     return sym;
 
   sym = makesym(name);
@@ -560,8 +585,15 @@ struct value_t* eval_list(struct value_t* val, struct value_t* env) {
   if (val == nil_p)
     return nil_p;
 
-  return cons(eval(car(val), env),
-              eval_list(cdr(val), env));
+  struct value_t * head = eval(car(val), env);
+  gc_root_push(head);
+
+  struct value_t* res = cons(head,
+                             eval_list(cdr(val), env));
+
+  gc_root_pop();
+
+  return res;
 }
 
 struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
@@ -650,13 +682,20 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
 
   if (proc->type == PROC) {
     struct value_t* params = eval_list(cdr(val), env);
-
     struct value_t* new_env = multiple_extend(env,
                                               proc->proc.params,
                                               params);
+    struct value_t* progn = cons(progn_p, proc->proc.body);
+    gc_root_push(params);
+    gc_root_push(new_env);
+    gc_root_push(progn);
 
-    return eval(cons(progn_p, proc->proc.body),
-                new_env);
+    struct value_t* res = eval(progn,
+                               new_env);
+    gc_root_pop();
+    gc_root_pop();
+    gc_root_pop();
+    return res;
   }
 
   if (proc->type == MACRO) {
@@ -664,12 +703,24 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
     struct value_t* new_env = multiple_extend(env,
                                               proc->proc.params,
                                               params);
+    struct value_t* progn = cons(progn_p, proc->proc.body);
 
-    struct value_t* new_form = eval(cons(progn_p, proc->proc.body),
+    gc_root_push(params);
+    gc_root_push(new_env);
+    gc_root_push(progn);
+
+    struct value_t* new_form = eval(progn,
                                     new_env);
+    gc_root_push(new_form);
 
-    return eval(new_form,
-                env);
+    struct value_t* res = eval(new_form,
+                               env);
+    gc_root_pop();
+    gc_root_pop();
+    gc_root_pop();
+    gc_root_pop();
+
+    return res;
   }
 
   die("Unsupported procedure type");
@@ -681,12 +732,7 @@ struct value_t* eval(struct value_t* val, struct value_t* env) {
     return nil_p;
 
   if (need_gc()) {
-    gc_mark(val);
-    gc_mark(env);
-    gc_mark(toplevel_env);
-    gc_mark(symbols);
-    gc_mark(toplevel_code);
-    gc_sweep();
+    collectgarbage();
   }
 
   struct value_t* tmp;
@@ -880,11 +926,21 @@ int main(int argc, char** argv) {
   free((void*)str);
   toplevel_code = val;
 
+  gc_root_push(val);
+  gc_root_push(toplevel_env);
+  gc_root_push(symbols);
+
   val = eval(val, toplevel_env);
 
   const char* res = print(val);
   printf("%s\n", res);
   free((void*)res);
+
+  collectgarbage();
+
+  gc_root_pop();
+  gc_root_pop();
+  gc_root_pop();
 
   if (verbose) {
     printf("memory allocations: %ld\n", number_of_allocations);
