@@ -90,6 +90,7 @@ DEFSYM(cdr);
 DEFSYM(setf);
 DEFSYM(define);
 DEFSYM(defmacro);
+DEFSYM(macroexpand);
 
 struct value_t *symbols = 0;
 struct value_t *toplevel_env = 0;
@@ -681,6 +682,28 @@ struct value_t* eval_cons(struct value_t* val, struct value_t* env) {
     return makeproc(car(cdr(val)), cdr(cdr(val)), env);
   }
 
+  if (car(val) == macroexpand_p) {
+    struct value_t* proc = eval(car(car(cdr(val))), env);
+
+    struct value_t* params = cdr(car(cdr(val)));
+    struct value_t* new_env = multiple_extend(env,
+                                              proc->proc.params,
+                                              params);
+    struct value_t* progn = cons(progn_p, proc->proc.body);
+
+    gc_root_push(params);
+    gc_root_push(new_env);
+    gc_root_push(progn);
+
+    struct value_t* res = eval(progn,
+                               new_env);
+
+    gc_root_pop();
+    gc_root_pop();
+    gc_root_pop();
+    return res;
+  }
+
   struct value_t* proc = eval(car(val), env);
 
   if (proc->type == PRIMITIVE) {
@@ -878,6 +901,7 @@ void init_env() {
   REGISTER_SYMBOL(setf);
   REGISTER_SYMBOL(define);
   REGISTER_SYMBOL(defmacro);
+  REGISTER_SYMBOL(macroexpand);
 
   toplevel_env = cons(nil_p, nil_p);
 
