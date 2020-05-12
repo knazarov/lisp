@@ -9,6 +9,7 @@ Features:
 - lambdas
 - closures
 - lexical scope
+- varargs
 - macros
 - loading code from files
 - simple mark & sweep garbage collector

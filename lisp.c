@@ -553,10 +553,19 @@ struct value_t* multiple_extend(struct value_t* env,
                                 struct value_t* values) {
   env = makeenv(env);
   struct value_t* res = env->cons.car;
-  struct value_t* sym = symbols;
   struct value_t* val = values;
-  for (;sym != nil_p && val != nil_p; sym = cdr(sym), val=cdr(val)) {
-    res = cons(cons(car(sym), car(val)), res);
+
+  if (symbols->type == CONS) {
+    struct value_t* sym = symbols;
+    for (;sym != nil_p && val != nil_p; sym = cdr(sym), val=cdr(val)) {
+      res = cons(cons(car(sym), car(val)), res);
+    }
+  }
+  else if (symbols->type == SYMBOL){
+    res = cons(cons(symbols, values), res);
+  }
+  else {
+    die("Can't extend environment");
   }
 
   env->cons.car = res;
