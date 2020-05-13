@@ -433,7 +433,7 @@ char* gettoken(const char** strp) {
       add_to_token_buf(*p);
 
       if (*p == '"') {
-        *strp = p;
+        *strp = p+1;
         return token_buf_to_str();
       }
     }
