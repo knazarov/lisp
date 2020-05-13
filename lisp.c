@@ -406,15 +406,31 @@ char* gettoken(const char** strp) {
   const char* p = *strp;
   token_buf_used = 0;
 
-  do {
-    if (isspace(*p))
-      ++p;
-  } while(isspace(*p));
 
-  if (*p == '\0') {
-    return 0;
+  for (;;) {
+    if (isspace(*p)) {
+      do {
+        if (isspace(*p))
+          ++p;
+      } while(isspace(*p));
+    }
+    else if (*p == ';') {
+      for(;; ++p) {
+        if (*p == '\0')
+          return 0;
+
+        if (*p == '\n') {
+          p++;
+          break;
+        }
+      }
+    }
+    else if (*p == '\0') {
+      return 0;
+    }
+    else
+      break;
   }
-
 
   add_to_token_buf(*p);
   if (*p == '(' || *p == ')' || *p == '\'') {
@@ -449,7 +465,11 @@ char* gettoken(const char** strp) {
         return token_buf_to_str();
     }
 
-    if (*p == '(' || *p == ')' || *p == '\'' || isspace(*p)) {
+    if (*p == '(' ||
+        *p == ')' ||
+        *p == ';' ||
+        *p == '\'' ||
+        isspace(*p)) {
       *strp = p;
       return token_buf_to_str();
     }
