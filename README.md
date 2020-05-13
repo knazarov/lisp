@@ -11,6 +11,8 @@ Features:
 - lexical scope
 - varargs
 - macros
+- numbers
+- strings
 - loading code from files
 - simple mark & sweep garbage collector
 

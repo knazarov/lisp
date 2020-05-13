@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <errno.h>
 
 #define SLAB_SIZE 1024
 #define TOKEN_BUF_SIZE 256
@@ -16,7 +17,8 @@ enum type_t {
   INT,
   PROC,
   PRIMITIVE,
-  MACRO
+  MACRO,
+  STRING
 };
 
 struct value_t;
@@ -30,7 +32,7 @@ struct cons_t {
 };
 
 struct symbol_t {
-  char* name;
+  const char* name;
 };
 
 struct proc_t {
@@ -49,6 +51,7 @@ struct value_t {
     struct proc_t proc;
     long int_value;
     primitive_op_t primitive_op;
+    const char* string_value;
   };
 };
 
@@ -134,6 +137,24 @@ struct value_t* slab_alloc() {
   return slab_alloc();
 }
 
+void free_value(struct value_t* val) {
+  switch(val->type) {
+  case SYMBOL:
+    free((void*)val->symbol.name);
+    break;
+  case STRING:
+    free((void*)val->string_value);
+    break;
+  case GUARD:
+  case CONS:
+  case INT:
+  case PROC:
+  case PRIMITIVE:
+  case MACRO:
+    break;
+  }
+}
+
 struct value_t *cons(struct value_t* car, struct value_t* cdr) {
   struct value_t *ret = slab_alloc();
 
@@ -182,6 +203,7 @@ void slab_free(struct value_t* val) {
     if (val >= slab->data && val <= &slab->data[SLAB_SIZE]) {
       size_t pos = (val - slab->data);
       slab->used_blocks[pos] = 0;
+      free_value(&slab->data[pos]);
       memset(&slab->data[pos], 0, sizeof(struct value_t));
 
       return;
@@ -298,6 +320,13 @@ struct value_t* makesym(const char* name) {
   return ret;
 }
 
+struct value_t* makestring(const char* val) {
+  struct value_t *ret = slab_alloc();
+  *ret = (struct value_t){.type = STRING, .string_value = strdup(val)};
+
+  return ret;
+}
+
 struct value_t* makeprimitive(primitive_op_t op) {
   struct value_t *ret = slab_alloc();
   *ret = (struct value_t){.type = PRIMITIVE, .primitive_op = op};
@@ -368,12 +397,12 @@ void add_to_token_buf(char c) {
   token_buf[token_buf_used++] = c;
 }
 
-const char* token_buf_to_str() {
+char* token_buf_to_str() {
   add_to_token_buf('\0');
   return token_buf;
 }
 
-const char* gettoken(const char** strp) {
+char* gettoken(const char** strp) {
   const char* p = *strp;
   token_buf_used = 0;
 
@@ -392,7 +421,23 @@ const char* gettoken(const char** strp) {
     *strp = p+1;
     return token_buf_to_str();
   }
+
   p++;
+
+  if (*(p-1) == '"') {
+    for(;; ++p) {
+      if (*p == '\0') {
+        *strp = p;
+        return 0;
+      }
+      add_to_token_buf(*p);
+
+      if (*p == '"') {
+        *strp = p;
+        return token_buf_to_str();
+      }
+    }
+  }
 
   for (;; ++p) {
     if (*p == '\0') {
@@ -447,10 +492,15 @@ struct value_t* readlist(const char** strp) {
 
 
 struct value_t* readobj(const char** strp) {
-  const char* token = gettoken(strp);
+  char* token = gettoken(strp);
 
   if (token == 0)
     return nil_p;
+
+  if (token[0] == '"') {
+    token[strlen(token)-1] = 0;
+    return makestring(token+1);
+  }
 
   if (strcmp(token, "(") == 0) {
     return readlist(strp);
@@ -531,6 +581,11 @@ const char* print(struct value_t* obj) {
 
       concat(&ret, " ");
     }
+    return ret;
+  case STRING:
+    concat(&ret, "\"");
+    concat(&ret, obj->string_value);
+    concat(&ret, "\"");
     return ret;
   case SYMBOL:
     return strdup(obj->symbol.name);
@@ -783,6 +838,8 @@ struct value_t* eval(struct value_t* val, struct value_t* env) {
     if (tmp == nil_p)
       die("Unbound symbol: %s\n", val->symbol.name);
     return cdr(tmp);
+  case STRING:
+    return val;
   case PRIMITIVE:
     return val;
   case PROC:
@@ -928,6 +985,11 @@ void init_env() {
 
 const char* read_file(const char* filename) {
   FILE *f = fopen(filename, "rb");
+
+   if (f == NULL) {
+     die("Error opening file '%s': %s\n", filename, strerror( errno ));
+   }
+
   fseek(f, 0, SEEK_END);
   long fsize = ftell(f);
   fseek(f, 0, SEEK_SET);
@@ -939,6 +1001,20 @@ const char* read_file(const char* filename) {
   string[fsize] = 0;
 
   return string;
+}
+
+struct value_t* eval_file(const char* filename) {
+  const char* str = read_file(filename);
+  struct value_t* val = read_multiple(str);
+  free((void*)str);
+
+  struct value_t* res;
+
+  gc_root_push(val);
+  res = eval(val, toplevel_env);
+  gc_root_pop();
+
+  return res;
 }
 
 int main(int argc, char** argv) {
@@ -961,16 +1037,12 @@ int main(int argc, char** argv) {
     die("Usage: lisp [-v] <filename>\n");
 
 
-  const char* str = read_file(filename);
-  struct value_t* val = read_multiple(str);
-  free((void*)str);
-  toplevel_code = val;
-
-  gc_root_push(val);
   gc_root_push(toplevel_env);
   gc_root_push(symbols);
 
-  val = eval(val, toplevel_env);
+  //eval_file("stdlib.lisp");
+
+  struct value_t* val = eval_file(filename);
 
   const char* res = print(val);
   printf("%s\n", res);
@@ -978,7 +1050,6 @@ int main(int argc, char** argv) {
 
   collectgarbage();
 
-  gc_root_pop();
   gc_root_pop();
   gc_root_pop();
 
