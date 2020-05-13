@@ -1011,7 +1011,11 @@ struct value_t* eval_file(const char* filename) {
   struct value_t* res;
 
   gc_root_push(val);
+  gc_root_push(symbols);
+
   res = eval(val, toplevel_env);
+
+  gc_root_pop();
   gc_root_pop();
 
   return res;
@@ -1038,9 +1042,8 @@ int main(int argc, char** argv) {
 
 
   gc_root_push(toplevel_env);
-  gc_root_push(symbols);
 
-  //eval_file("stdlib.lisp");
+  eval_file("stdlib.lisp");
 
   struct value_t* val = eval_file(filename);
 
@@ -1050,7 +1053,6 @@ int main(int argc, char** argv) {
 
   collectgarbage();
 
-  gc_root_pop();
   gc_root_pop();
 
   if (verbose) {
