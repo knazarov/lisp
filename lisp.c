@@ -334,6 +334,13 @@ struct value_t *makeenv(struct value_t* parent) {
   return ret;
 }
 
+long get_int(struct value_t* val) {
+  if (val->type != INT)
+    die("Attempt to get int value of non-integer");
+
+  return val->int_value;
+}
+
 struct value_t* find_symbol(const char* name) {
   struct value_t* sym;
   for (sym = symbols; !is_nil(sym); sym = cdr(sym)) {
@@ -809,7 +816,7 @@ struct value_t* primitive_plus(struct value_t* val) {
     if (car(val)->type != INT)
       die("Can't add non-integer values");
 
-    sum = sum + car(val)->int_value;
+    sum = sum + get_int(car(val));
   }
 
   return makeint(sum);
@@ -824,9 +831,9 @@ struct value_t* primitive_minus(struct value_t* val) {
       die("Can't add non-integer values");
 
     if (count == 0)
-      sum = sum + car(val)->int_value;
+      sum = sum + get_int(car(val));
     else
-      sum = sum - car(val)->int_value;
+      sum = sum - get_int(car(val));
   }
 
   if (count == 1)
@@ -842,7 +849,7 @@ struct value_t* primitive_mul(struct value_t* val) {
     if (car(val)->type != INT)
       die("Can't multiply non-integer values");
 
-    mul = mul * car(val)->int_value;
+    mul = mul * get_int(car(val));
   }
 
   return makeint(mul);
@@ -854,13 +861,13 @@ struct value_t* primitive_div(struct value_t* val) {
   if (car(val)->type != INT)
     die("Can't add non-integer values");
 
-  long res = car(val)->int_value;
+  long res = get_int(car(val));
 
   for (val=cdr(val); val!=nil_p; val=cdr(val)) {
     if (car(val)->type != INT)
       die("Can't divide non-integer values");
 
-    res = res / car(val)->int_value;
+    res = res / get_int(car(val));
   }
 
   return makeint(res);
@@ -873,13 +880,13 @@ struct value_t* primitive_equals(struct value_t* val) {
   if (car(val)->type != INT)
     die("Can't add non-integer values");
 
-  long res = car(val)->int_value;
+  long res = get_int(car(val));
 
   for (;val!=nil_p; val=cdr(val)) {
     if (car(val)->type != INT)
       die("Can't compare non-integer values");
 
-    if (res != car(val)->int_value)
+    if (res != get_int(car(val)))
       return nil_p;
   }
 
